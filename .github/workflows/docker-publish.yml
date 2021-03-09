@@ -37,7 +37,7 @@ jobs:
 
   # Push image to GitHub Packages.
   # See also https://docs.docker.com/docker-hub/builds/
-  push:
+  buildx:
     # Ensure test job passes before pushing image.
     needs: test
 
@@ -45,15 +45,25 @@ jobs:
     if: github.event_name == 'push'
 
     steps:
-      - uses: actions/checkout@v2
-
-      - name: Build image
-        run: docker build . --file Dockerfile --tag $IMAGE_NAME
-
-      - name: Log into registry
-        run: echo "${{ secrets.ACCESS_TOKEN }}" | docker login -u etnperlong --password-stdin
-
-      - name: Push image
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Get current date
+        id: date
+        run: echo "::set-output name=today::$(date +'%Y-%m-%d')"
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v1
+      - name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v1
+      - name: Available platforms
+        run: echo ${{ steps.buildx.outputs.platforms }}
+      - name: Login to DockerHub
+        uses: docker/login-action@v1
+        with:
+          username: etnperlong
+          password: ${{ secrets.ACCESS_TOKEN }}
+      - name: Pre-tag image
+        id: pretag
         run: |
           IMAGE_ID=etnperlong/$IMAGE_NAME
 
@@ -68,9 +78,20 @@ jobs:
 
           # Use Docker `latest` tag convention
           [ "$VERSION" == "master" ] && VERSION=latest
-
+          echo "::set-output name=image_id::$IMAGE_ID"
+          echo "::set-output name=image_ver::$VERSION"
           echo IMAGE_ID=$IMAGE_ID
           echo VERSION=$VERSION
-
-          docker tag $IMAGE_NAME $IMAGE_ID:$VERSION
-          docker push $IMAGE_ID:$VERSION
+      - name: Build and push
+        uses: docker/build-push-action@v2
+        with:
+          context: .
+          file: ./Dockerfile
+          # 所需要的体系结构，可以在 Available platforms 步骤中获取所有的可用架构
+          platforms: linux/amd64,linux/386,linux/arm64/v8,linux/arm/v7,linux/arm/v5
+          # 镜像推送时间
+          push: ${{ github.event_name != 'pull_request' }}
+          # 给清单打上多个标签
+          tags: |
+            ${{ steps.pretag.outputs.image_id }}:${{ steps.pretag.outputs.image_ver }}
+            ${{ steps.pretag.outputs.image_id }}:${{ steps.date.outputs.today }}
